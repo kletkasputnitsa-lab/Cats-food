@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Таблица кормов для кошек</title>
+<style>
+  body { font-family: Arial, sans-serif; padding: 20px; background: #f7f7f7; }
+  h1 { font-size: 20px; }
+  table { border-collapse: collapse; width: 100%; background: #fff; }
+  th, td { border: 1px solid #999; padding: 6px 8px; font-size: 13px; text-align: center; }
+  th { background: #e8e8e8; position: sticky; top: 0; }
+  th[contenteditable]:focus { outline: 2px solid #4a90e2; background: #eef6ff; }
+  td[contenteditable]:focus { outline: 2px solid #4a90e2; background: #eef6ff; }
+  .color-cell { cursor: pointer; width: 60px; }
+  .color-cell span { display:block; width: 100%; height: 22px; border-radius: 3px; border: 1px solid #ccc; }
+  .ok { color: green; font-weight: bold; }
+  .bad { color: red; font-weight: bold; }
+  button { padding: 6px 12px; margin: 5px 5px 15px 0; cursor: pointer; }
+  input[type="color"] { position: absolute; visibility: hidden; }
+  .legend { font-size: 12px; color: #555; margin-bottom: 10px; }
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { background: #dcdcdc; }
+  th .arrow { font-size: 10px; color: #666; margin-left: 3px; }
+  .del-col { color: #b00; font-size: 11px; cursor: pointer; margin-left: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Таблица кормов для кошек</h1>
+<div class="legend">Клик по ячейке — редактирование. Клик по ячейке «Цвет пачки» — выбор цвета. Клик по заголовку «Цена» — сортировка. Название столбца тоже можно менять — кликните по нему. Данные сохраняются в браузере.</div>
+
+<button onclick="addRow()">+ Добавить строку</button>
+<button onclick="addColumn()">+ Добавить столбец</button>
+<button onclick="exportCSV()">Экспорт CSV</button>
+<button onclick="clearAll()">Очистить всё</button>
+
+<table id="tbl">
+  <thead>
+    <tr id="headRow">
+      <th contenteditable="true">Бренд корма</th>
+      <th contenteditable="true">Вкус</th>
+      <th contenteditable="true">Категория кошек</th>
+      <th>Цвет пачки</th>
+      <th contenteditable="true">Мясо, %</th>
+      <th class="sortable" data-col="5" data-type="number">Цена <span class="arrow">↕</span></th>
+      <th contenteditable="true">Магазин</th>
+      <th contenteditable="true">Кальций &lt;0,3%</th>
+      <th contenteditable="true">Фосфор &lt;0,25%</th>
+      <th contenteditable="true">Магний 0,02–0,03%</th>
+      <th contenteditable="true">Багира</th>
+      <th contenteditable="true">Саша</th>
+      <th id="delColHead"></th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<input type="color" id="picker">
+
+<script>
+const KEY = 'catFoodTable_v2';
+const tbody = document.querySelector('#tbl tbody');
+const headRow = document.getElementById('headRow');
+const picker = document.getElementById('picker');
+let currentColorCell = null;
+let sortState = { col: null, dir: 1 };
+
+// Индексы фиксированных столбцов
+const COLOR_COL = 3;           // "Цвет пачки"
+const PRICE_COL = 5;           // "Цена" (для сортировки)
+const NORM_COLS = [7, 8, 9];   // Кальций, Фосфор, Магний
+
+// Сколько столбцов сейчас (без колонки удаления)
+function getColCount() {
+  return headRow.querySelectorAll('th').length - 1; // последний th — корзина
+}
+
+// ================== СТРОКИ ==================
+function makeRow(data = {}) {
+  const tr = document.createElement('tr');
+  const cols = getColCount();
+
+  for (let i = 0; i < cols; i++) {
+    const td = document.createElement('td');
+
+    if (i === COLOR_COL) {
+      td.className = 'color-cell';
+      td.innerHTML = '<span></span>';
+      td.onclick = () => {
+        currentColorCell = td.querySelector('span');
+        picker.value = rgbToHex(getComputedStyle(currentColorCell).backgroundColor) || '#ffffff';
+        picker.click();
+      };
+      if (data.color) td.querySelector('span').style.background = data.color;
+    } else {
+      td.contentEditable = 'true';
+      td.textContent = data.cells?.[i] || '';
+      if (NORM_COLS.includes(i)) td.oninput = () => markNorm(td, i);
+    }
+    tr.appendChild(td);
+  }
+
+  const del = document.createElement('td');
+  del.innerHTML = '<button onclick="this.closest(\'tr\').remove(); save()">✕</button>';
+  tr.appendChild(del);
+
+  tbody.appendChild(tr);
+  return tr;
+}
+
+function addRow(data) {
+  makeRow(data);
+  save();
+}
+
+// ================== СТОЛБЦЫ ==================
+function addColumn(name) {
+  const title = name ?? prompt('Название нового столбца:', 'Новый столбец');
+  if (title === null) return;
+
+  const delHead = document.getElementById('delColHead');
+
+  // Заголовок
+  const th = document.createElement('th');
+  th.contentEditable = 'true';
+  th.textContent = title;
+  headRow.insertBefore(th, delHead);
+
+  // Ячейки во всех строках
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const td = document.createElement('td');
+    td.contentEditable = 'true';
+    tr.insertBefore(td, tr.lastElementChild);
+  });
+
+  save();
+}
+
+// Удаление столбца по индексу (без учёта колонки-корзины)
+function deleteColumn(idx) {
+  if (idx === COLOR_COL) { alert('Столбец «Цвет пачки» удалить нельзя'); return; }
+  if (idx === PRICE_COL) { alert('Столбец «Цена» удалить нельзя (по нему сортировка)'); return; }
+  if (getColCount() <= 1) return;
+  if (!confirm('Удалить этот столбец?')) return;
+
+  const ths = headRow.querySelectorAll('th');
+  ths[idx].remove();
+
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const tds = tr.querySelectorAll('td');
+    if (tds[idx]) tds[idx].remove();
+  });
+
+  // обновляем data-col у цены — позиция могла сдвинуться
+  refreshPriceColIndex();
+  save();
+}
+
+function refreshPriceColIndex() {
+  const ths = Array.from(headRow.querySelectorAll('th'));
+  const priceTh = ths.find(t => t.classList.contains('sortable'));
+  if (priceTh) {
+    const idx = ths.indexOf(priceTh);
+    priceTh.dataset.col = idx;
+    window.PRICE_COL_DYNAMIC = idx;
+  }
+}
+
+// Крестик удаления столбцов добавляем после каждого заголовка
+function attachDeleteButtons() {
+  const ths = headRow.querySelectorAll('th');
+  // чистим прежние крестики
+  ths.forEach(th => {
+    const old = th.querySelector('.del-col');
+    if (old) old.remove();
+  });
+  ths.forEach((th, idx) => {
+    if (th.id === 'delColHead') return;
+    if (idx === COLOR_COL) return;
+    if (th.classList.contains('sortable')) return; // цену не удаляем
+    const x = document.createElement('span');
+    x.className = 'del-col';
+    x.textContent = '✕';
+    x.title = 'Удалить столбец';
+    x.onclick = (e) => { e.stopPropagation(); deleteColumn(idx); };
+    th.appendChild(x);
+  });
+}
+
+// ================== ЦВЕТ ==================
+picker.oninput = () => {
+  if (currentColorCell) {
+    currentColorCell.style.background = picker.value;
+    save();
+  }
+};
+
+function rgbToHex(rgb) {
+  const m = rgb.match(/\d+/g);
+  if (!m) return '#ffffff';
+  return '#' + m.slice(0,3).map(x => (+x).toString(16).padStart(2,'0')).join('');
+}
+
+// ================== НОРМЫ ==================
+function markNorm(td, col) {
+  const v = parseFloat(td.textContent.replace(',', '.'));
+  td.classList.remove('ok','bad');
+  if (isNaN(v)) return;
+  const limits = { 7: 0.3, 8: 0.25 }; // кальций, фосфор
+  if (col === 7 || col === 8) {
+    td.classList.add(v < limits[col] ? 'ok' : 'bad');
+  }
+  if (col === 9) {
+    td.classList.add(v >= 0.02 && v <= 0.03 ? 'ok' : 'bad');
+  }
+}
+
+// ================== СОХРАНЕНИЕ ==================
+function save() {
+  const headers = [];
+  headRow.querySelectorAll('th').forEach((th, i) => {
+    if (th.id === 'delColHead') return;
+    headers.push(th.textContent.replace('✕','').replace('↕','').trim());
+  });
+
+  const rows = [];
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const tds = tr.querySelectorAll('td');
+    const cells = [];
+    for (let i = 0; i < getColCount(); i++) {
+      cells.push(i === COLOR_COL ? '' : (tds[i].textContent || ''));
+    }
+    const color = tds[COLOR_COL].querySelector('span')?.style.background || '';
+    rows.push({ cells, color });
+  });
+
+  localStorage.setItem(KEY, JSON.stringify({ headers, rows }));
+}
+
+function load() {
+  const raw = localStorage.getItem(KEY);
+  if (!raw) return false;
+  const data = JSON.parse(raw);
+
+  // Восстанавливаем пользовательские столбцы (кроме фиксированных)
+  if (data.headers) {
+    const fixedCount = 12; // стандартных столбцов (без корзины)
+    for (let i = fixedCount; i < data.headers.length; i++) {
+      addColumnSilent(data.headers[i]);
+    }
+  }
+
+  (data.rows || []).forEach(r => makeRow(r));
+  attachDeleteButtons();
+  refreshPriceColIndex();
+  return true;
+}
+
+// добавление столбца без prompt (для загрузки)
+function addColumnSilent(title) {
+  const delHead = document.getElementById('delColHead');
+  const th = document.createElement('th');
+  th.contentEditable = 'true';
+  th.textContent = title;
+  headRow.insertBefore(th, delHead);
+
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const td = document.createElement('td');
+    td.contentEditable = 'true';
+    tr.insertBefore(td, tr.lastElementChild);
+  });
+}
+
+// ================== ЭКСПОРТ ==================
+function exportCSV() {
+  const headers = [];
+  headRow.querySelectorAll('th').forEach(th => {
+    if (th.id === 'delColHead') return;
+    headers.push(th.textContent.replace('✕','').replace('↕','').trim());
+  });
+
+  let csv = headers.join(';') + '\n';
+
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const tds = tr.querySelectorAll('td');
+    const line = [];
+    for (let i = 0; i < getColCount(); i++) {
+      if (i === COLOR_COL) line.push(tds[COLOR_COL].querySelector('span').style.background || '');
+      else line.push((tds[i].textContent || '').replace(/;/g, ','));
+    }
+    csv += line.join(';') + '\n';
+  });
+
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'cat_food.csv';
+  a.click();
+}
+
+function clearAll() {
+  if (confirm('Удалить все строки?')) {
+    tbody.innerHTML = '';
+    localStorage.removeItem(KEY);
+  }
+}
+
+// ================== СОРТИРОВКА (только Цена) ==================
+headRow.querySelector('th.sortable').onclick = function() {
+  const col = +this.dataset.col;
+  const type = this.dataset.type || 'number';
+
+  if (sortState.col === col) sortState.dir *= -1;
+  else { sortState.col = col; sortState.dir = 1; }
+
+  this.querySelector('.arrow').textContent = sortState.dir === 1 ? '▲' : '▼';
+  sortTable(col, type, sortState.dir);
+  save();
+};
+
+function sortTable(col, type, dir) {
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+
+  rows.sort((a, b) => {
+    const A = getCellValue(a, col, type);
+    const B = getCellValue(b, col, type);
+
+    if (A === null && B === null) return 0;
+    if (A === null) return 1;
+    if (B === null) return -1;
+
+    if (type === 'number') return (A - B) * dir;
+    return String(A).localeCompare(String(B), 'ru') * dir;
+  });
+
+  rows.forEach(r => tbody.appendChild(r));
+}
+
+function getCellValue(tr, col, type) {
+  const tds = tr.querySelectorAll('td');
+  if (!tds[col]) return null;
+  let v = (tds[col].textContent || '').trim();
+  if (!v) return null;
+
+  if (type === 'number') {
+    v = v.replace(/[^\d,.\-]/g, '').replace(',', '.');
+    const n = parseFloat(v);
+    return isNaN(n) ? null : n;
+  }
+  return v.toLowerCase();
+}
+
+// ================== СОХРАНЕНИЕ ПРИ РЕДАКТИРОВАНИИ ==================
+document.addEventListener('input', e => {
+  if (e.target.matches('td[contenteditable], th[contenteditable]')) save();
+});
+
+// ================== СТАРТ ==================
+if (!load()) {
+  addRow(); addRow(); addRow();
+  attachDeleteButtons();
+}
+</script>
+</body>
+</html>
